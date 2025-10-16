@@ -521,10 +521,20 @@ def main():
     logger.info(f"  Learning rate: {config['training']['learning_rate']}")
     logger.info(f"  Epochs: {config['training']['num_epochs']}")
 
-    # Create directories
-    for path_name, path in config["paths"].items():
-        Path(path).mkdir(parents=True, exist_ok=True)
-        logger.info(f"  {path_name}: {path}")
+    # Create timestamped output directories for this run
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    run_dir = Path(config["paths"]["models"]) / f"run_{timestamp}"
+    embeddings_dir = Path(config["paths"]["embeddings"]) / f"run_{timestamp}"
+
+    run_dir.mkdir(parents=True, exist_ok=True)
+    embeddings_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- Update config paths so subsequent functions write into this run ---
+    config["paths"]["models"] = str(run_dir)
+    config["paths"]["embeddings"] = str(embeddings_dir)
+
+    logger.info(f"  Created run directory: {run_dir}")
+    logger.info(f"  Created embeddings directory: {embeddings_dir}")
 
     # Load preprocessed data
     splits = load_preprocessed_data(data_dir="./data/processed")
@@ -540,15 +550,29 @@ def main():
     # Generate embeddings
     embeddings_data = generate_embeddings(model, splits, config)
 
-    # Final summary
+    # Save run summary to a small info file for easy tracking
+    run_info = {
+        "timestamp": timestamp,
+        "base_model": config["model"]["base_model"],
+        "num_epochs": metrics["training_epochs"],
+        "best_val_f1": metrics["best_val_f1"],
+        "test_f1": metrics["test_f1"],
+        "model_path": str(run_dir / "best_model.pt"),
+        "metrics_path": str(run_dir / "metrics.json"),
+        "embeddings_path": str(embeddings_dir / "embeddings.npz"),
+    }
+
+    with open(run_dir / "run_info.json", "w") as f:
+        json.dump(run_info, f, indent=2)
+
     logger.info("\n" + "=" * 60)
     logger.info("TRAINING COMPLETED SUCCESSFULLY!")
     logger.info("=" * 60)
     logger.info(f"Final Test F1 Score: {metrics['test_f1']:.4f}")
     logger.info(f"Best Validation F1 Score: {metrics['best_val_f1']:.4f}")
     logger.info(f"Total Training Epochs: {metrics['training_epochs']}")
-    logger.info(f"Model saved to: {config['paths']['models']}")
-    logger.info(f"Embeddings saved to: {config['paths']['embeddings']}")
+    logger.info(f"Model saved to: {run_dir}")
+    logger.info(f"Embeddings saved to: {embeddings_dir}")
     logger.info("=" * 60)
 
 
