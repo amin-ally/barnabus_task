@@ -11,7 +11,7 @@ class HateSpeechClassifier(nn.Module):
 
     def __init__(
         self,
-        model_name: str = "distilbert-base-multilingual-cased",  # Updated to match config.yaml
+        model_name: str = "distilbert-base-multilingual-cased",
         num_classes: int = 3,
         dropout_rate: float = 0.3,
     ):
@@ -50,9 +50,43 @@ class HateSpeechClassifier(nn.Module):
 
         outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
 
-        # Use CLS token representation
-        pooled_output = outputs.last_hidden_state[:, 0, :]
+        # This is the full output tensor from BERT.
+        # Shape: (batch_size, max_length, hidden_size) -> e.g., (16, 128, 768)
+        last_hidden_state = outputs.last_hidden_state
 
+        # --- MEAN POOLING IMPLEMENTATION ---
+
+        # Step 1: Get the attention mask in the right shape for broadcasting.
+        # The attention_mask from the tokenizer is (batch_size, max_length) -> e.g., (16, 128)
+        # We need to multiply it with last_hidden_state, which is 3D.
+        # We add a dimension at the end to make it (16, 128, 1).
+        input_mask_expanded = (
+            attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
+        )
+
+        # Step 2: Zero out the embeddings of padding tokens.
+        # We perform element-wise multiplication. Where the mask is 1, the original vector is kept.
+        # Where the mask is 0 (padding), the vector becomes all zeros.
+        # Shape of sum_embeddings is still (16, 128, 768)
+        sum_embeddings = last_hidden_state * input_mask_expanded
+
+        # Step 3: Sum the vectors along the sequence dimension.
+        # We sum up all the token vectors for each sentence in the batch.
+        # The result is a single vector per sentence.
+        # Shape becomes (batch_size, hidden_size) -> e.g., (16, 768)
+        sum_embeddings = torch.sum(sum_embeddings, 1)
+
+        # Step 4: Count the number of actual tokens in each sentence.
+        # We sum the attention mask along the sequence dimension.
+        # This gives us the length of each sentence (without padding).
+        # We clamp the minimum to 1e-9 to avoid division by zero if a sentence were empty.
+        sum_mask = torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+
+        # Step 5: Calculate the average.
+        # Divide the sum of vectors (Step 3) by the number of tokens (Step 4).
+        # This is the final, mean-pooled sentence representation.
+        # Shape: (batch_size, hidden_size) -> e.g., (16, 768)
+        pooled_output = sum_embeddings / sum_mask
         # Get embeddings if needed
         embeddings = None
         if return_embeddings:
