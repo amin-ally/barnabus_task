@@ -260,15 +260,20 @@ async def classify_text(text_request: TextRequest, request: Request):
 
         # 4. Get the tokens
         tokens = model.tokenizer.convert_ids_to_tokens(input_ids.squeeze(0))
-
+        special_tokens = [
+            tok
+            for tok in [
+                model.tokenizer.cls_token,
+                model.tokenizer.bos_token,
+                model.tokenizer.sep_token,
+                model.tokenizer.pad_token,
+            ]
+            if tok is not None
+        ]
         # 5. Combine tokens and scores, filtering out special tokens
         explanation_data = []
         for token, score in zip(tokens, cls_attentions.cpu().numpy()):
-            if token not in [
-                model.tokenizer.cls_token,
-                model.tokenizer.sep_token,
-                model.tokenizer.pad_token,
-            ]:
+            if token not in special_tokens:
                 explanation_data.append({"token": token, "score": float(score)})
 
         # Process explanations only if we have valid tokens
