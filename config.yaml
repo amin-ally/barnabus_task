@@ -1,9 +1,5 @@
 # config.yaml
 data:
-  dataset_name: "hate_speech_offensive"
-  test_size: 0.15
-  val_size: 0.15
-  random_state: 42
   max_length: 128
   balance_strategy: "undersample"
 
@@ -16,7 +12,7 @@ model:
 training:
   batch_size: 16
   learning_rate: 0.00002
-  num_epochs: 5
+  num_epochs: 10
   warmup_steps: 500
   gradient_clip: 1.0
   early_stopping_patience: 3
