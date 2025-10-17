@@ -173,7 +173,7 @@ def create_data_loaders(config, splits):
         train_dataset,
         batch_size=config["training"]["batch_size"],
         shuffle=True,
-        num_workers=config["training"].get("num_workers", 2),
+        num_workers=0,
         pin_memory=True if torch.cuda.is_available() else False,
     )
 
@@ -181,7 +181,7 @@ def create_data_loaders(config, splits):
         val_dataset,
         batch_size=config["training"]["batch_size"],
         shuffle=False,
-        num_workers=config["training"].get("num_workers", 2),
+        num_workers=0,
         pin_memory=True if torch.cuda.is_available() else False,
     )
 
@@ -189,7 +189,7 @@ def create_data_loaders(config, splits):
         test_dataset,
         batch_size=config["training"]["batch_size"],
         shuffle=False,
-        num_workers=config["training"].get("num_workers", 2),
+        num_workers=0,
         pin_memory=True if torch.cuda.is_available() else False,
     )
 
@@ -437,7 +437,7 @@ def generate_embeddings(model, splits, config):
             dataset,
             batch_size=config["training"].get("embedding_batch_size", 32),
             shuffle=False,
-            num_workers=2,
+            num_workers=0,
         )
 
         split_embeddings = []
