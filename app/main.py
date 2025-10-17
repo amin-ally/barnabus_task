@@ -105,7 +105,7 @@ LABEL_MAP = {0: "safe", 1: "sensitive", 2: "hateful"}
 
 
 @app.on_event("startup")
-async def load_model():
+def load_model():
     """Load model and embeddings on startup"""
     global model, preprocessor, faiss_index, embeddings_data, device
 
@@ -477,7 +477,6 @@ async def find_similar_messages(
             )
 
         query_embedding = outputs["embeddings"].cpu().numpy()
-        faiss.normalize_L2(query_embedding)
 
         # Search the FAISS index
         distances, indices = faiss_index.search(query_embedding, k)
