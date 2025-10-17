@@ -200,7 +200,7 @@ def create_data_loaders(config, splits):
     return train_loader, val_loader, test_loader, model
 
 
-def train_model(config, train_loader, val_loader, test_loader, model):
+def train_model(config, train_loader, val_loader, test_loader, model, test_df):
     """Train the classification model"""
     logger.info("\n" + "=" * 60)
     logger.info("STARTING MODEL TRAINING")
@@ -303,7 +303,7 @@ def train_model(config, train_loader, val_loader, test_loader, model):
     # Final test evaluation
     test_metrics = trainer.evaluate(test_loader)
 
-    # Generate classification report
+    # Generate overall classification report
     label_names = ["safe", "sensitive", "hateful"]  # Based on label mapping: 0, 1, 2
     report = classification_report(
         test_metrics["true_labels"],
@@ -312,7 +312,7 @@ def train_model(config, train_loader, val_loader, test_loader, model):
         output_dict=True,
     )
 
-    logger.info("\nClassification Report:")
+    logger.info("\nOverall Classification Report:")
     print(
         classification_report(
             test_metrics["true_labels"],
@@ -321,7 +321,7 @@ def train_model(config, train_loader, val_loader, test_loader, model):
         )
     )
 
-    # Plot confusion matrix
+    # Plot overall confusion matrix
     plot_confusion_matrix(
         test_metrics["true_labels"],
         test_metrics["predictions"],
@@ -329,12 +329,51 @@ def train_model(config, train_loader, val_loader, test_loader, model):
         save_path=Path(config["paths"]["models"]) / "confusion_matrix.png",
     )
 
+    # Per-language metrics
+    languages = test_df["language"].tolist()
+    unique_langs = set(languages)
+    per_lang_reports = {}
+
+    for lang in unique_langs:
+        indices = [i for i, l in enumerate(languages) if l == lang]
+        y_true_lang = [test_metrics["true_labels"][i] for i in indices]
+        y_pred_lang = [test_metrics["predictions"][i] for i in indices]
+
+        if len(y_true_lang) == 0:
+            continue
+
+        report_lang = classification_report(
+            y_true_lang,
+            y_pred_lang,
+            target_names=label_names,
+            output_dict=True,
+        )
+        per_lang_reports[lang] = report_lang
+
+        logger.info(f"\nPer-language ({lang}) Classification Report:")
+        print(
+            classification_report(
+                y_true_lang,
+                y_pred_lang,
+                target_names=label_names,
+            )
+        )
+
+        # Plot per-language confusion matrix
+        plot_confusion_matrix(
+            y_true_lang,
+            y_pred_lang,
+            label_names,
+            save_path=Path(config["paths"]["models"]) / f"confusion_matrix_{lang}.png",
+        )
+
     # Save metrics
     metrics = {
         "test_f1": float(test_metrics["f1"]),
         "test_loss": float(test_metrics["loss"]),
         "test_confidence": float(test_metrics["avg_confidence"]),
         "classification_report": report,
+        "per_language_reports": per_lang_reports,
         "best_val_f1": float(best_val_f1),
         "training_epochs": epoch + 1,
         "total_parameters": sum(p.numel() for p in model.parameters()),
@@ -544,7 +583,7 @@ def main():
 
     # Train model
     model, trainer, metrics = train_model(
-        config, train_loader, val_loader, test_loader, model
+        config, train_loader, val_loader, test_loader, model, splits["test"]
     )
 
     # Generate embeddings
