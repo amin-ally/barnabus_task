@@ -29,24 +29,6 @@ class MultilingualHateSpeechDataLoader:
         self.parsoff_data_path = parsoff_data_path
         self.phate_data_path = phate_data_path
 
-        # Unified label mapping for both languages
-        self.label_mapping = {
-            # English mappings (hate_speech_offensive)
-            0: "hateful",  # hate speech
-            1: "sensitive",  # offensive but not hate speech
-            2: "safe",  # neither offensive nor hate speech
-            # Pars-OFF mappings
-            "OFF": "sensitive",  # Offensive content
-            "NOT": "safe",  # Not offensive
-            # Level B mappings (for more granular classification)
-            "TIN": "hateful",  # Targeted insult (individual)
-            "UNT": "sensitive",  # Untargeted
-            # Level C mappings
-            "IND": "hateful",  # Individual target
-            "GRP": "hateful",  # Group target
-            "OTH": "hateful",  # Other target
-        }
-
     def load_english_dataset(self) -> pd.DataFrame:
         """Load the hate_speech_offensive dataset from HuggingFace"""
         logger.info("Loading English hate_speech_offensive dataset...")

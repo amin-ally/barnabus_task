@@ -28,6 +28,7 @@ class HateSpeechClassifier(nn.Module):
 
         # Classification head
         self.classifier = nn.Sequential(
+            nn.LayerNorm(hidden_size),
             nn.Dropout(dropout_rate),
             nn.Linear(hidden_size, hidden_size // 2),
             nn.ReLU(),
@@ -50,10 +51,7 @@ class HateSpeechClassifier(nn.Module):
 
         outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
 
-        # This is the full output tensor from BERT.
-        # Shape: (batch_size, max_length, hidden_size) -> e.g., (16, 128, 768)
         last_hidden_state = outputs.last_hidden_state
-
         # --- MEAN POOLING IMPLEMENTATION ---
 
         # Step 1: Get the attention mask in the right shape for broadcasting.
@@ -65,8 +63,6 @@ class HateSpeechClassifier(nn.Module):
         )
 
         # Step 2: Zero out the embeddings of padding tokens.
-        # We perform element-wise multiplication. Where the mask is 1, the original vector is kept.
-        # Where the mask is 0 (padding), the vector becomes all zeros.
         # Shape of sum_embeddings is still (16, 128, 768)
         sum_embeddings = last_hidden_state * input_mask_expanded
 
@@ -90,8 +86,7 @@ class HateSpeechClassifier(nn.Module):
         # Get embeddings if needed
         embeddings = None
         if return_embeddings:
-            embeddings = self.embedding_layer(pooled_output)
-            embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
+            embeddings = torch.nn.functional.normalize(pooled_output, p=2, dim=1)
 
         # Classification
         logits = self.classifier(pooled_output)
