@@ -4,10 +4,9 @@ data:
   balance_strategy: "undersample"
 
 model:
-  base_model: "distilbert-base-multilingual-cased"
+  base_model: "microsoft/Multilingual-MiniLM-L12-H384"
   num_classes: 3
   dropout_rate: 0.3
-  embedding_dim: 384
 
 training:
   batch_size: 16
@@ -17,6 +16,7 @@ training:
   gradient_clip: 1.0
   early_stopping_patience: 3
   checkpoint_dir: "models/"
+  mode: "fine-tune" # Can be "fine-tune" or "frozen"
 
 api:
   host: "0.0.0.0"

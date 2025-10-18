@@ -138,12 +138,19 @@ def create_data_loaders(config, splits):
         (train_loader, val_loader, test_loader)
     """
     logger.info("\nCreating PyTorch data loaders...")
+    # Determine if the backbone should be frozen based on the config
+    freeze_backbone = config["training"].get("mode", "fine-tune") == "frozen"
+    if freeze_backbone:
+        logger.warning(
+            "ABLATION MODE: The model backbone is frozen. Only the classifier head will be trained."
+        )
 
     # Initialize model to get tokenizer
     model = HateSpeechClassifier(
         model_name=config["model"]["base_model"],
         num_classes=config["model"]["num_classes"],
         dropout_rate=config["model"]["dropout_rate"],
+        freeze_backbone=freeze_backbone,
     )
 
     # Create datasets

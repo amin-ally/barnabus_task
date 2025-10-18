@@ -14,6 +14,7 @@ class HateSpeechClassifier(nn.Module):
         model_name: str = "distilbert-base-multilingual-cased",
         num_classes: int = 3,
         dropout_rate: float = 0.3,
+        freeze_backbone: bool = False,
     ):
         super().__init__()
         self.model_name = model_name
@@ -22,6 +23,9 @@ class HateSpeechClassifier(nn.Module):
         # Load pretrained model
         self.bert = AutoModel.from_pretrained(model_name, output_attentions=True)
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        if freeze_backbone:
+            for param in self.bert.parameters():
+                param.requires_grad = False
 
         # Get hidden size
         hidden_size = self.bert.config.hidden_size
@@ -35,11 +39,6 @@ class HateSpeechClassifier(nn.Module):
             nn.Dropout(dropout_rate),
             nn.Linear(hidden_size // 2, num_classes),
         )
-
-        # For embeddings
-        self.embedding_layer = nn.Linear(
-            hidden_size, 384
-        )  # Reduce dimension for storage
 
     def forward(
         self,
