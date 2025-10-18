@@ -268,7 +268,6 @@ def train_model(config, train_loader, val_loader, test_loader, model, test_df):
                 {
                     "epoch": epoch,
                     "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
                     "val_f1": val_metrics["f1"],
                     "config": config,
                 },
