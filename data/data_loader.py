@@ -156,7 +156,7 @@ class MultilingualHateSpeechDataLoader:
 
         for file_path in [part1_path, part2_path]:
             if file_path.exists():
-                df = pd.read_csv(file_path)
+                df = pd.read_csv(file_path, sep="\t")
                 dfs.append(df)
                 logger.info(f"Loaded {len(df)} samples from {file_path.name}")
             else:
@@ -169,23 +169,21 @@ class MultilingualHateSpeechDataLoader:
         # Combine parts
         combined_df = pd.concat(dfs, ignore_index=True)
 
-        # Rename columns to standardize
-        combined_df.rename(
-            columns={"Text": "text", "Category": "category"},
-            inplace=True,
-            errors="ignore",
-        )
+        # Standardize text column
+        combined_df["text"] = combined_df["comment_normalized"]
 
         # Filter out spam
-        combined_df = combined_df[combined_df["category"] != "Spam"]
+        combined_df = combined_df[combined_df["spam"] != 1]
 
         # Map labels
-        combined_df["label_text"] = combined_df["category"].map(
-            {"Hate Speech": "hateful", "Obscenity": "sensitive"}
+        combined_df["label_text"] = combined_df.apply(
+            lambda row: (
+                "hateful"
+                if row["hate"] == 1
+                else "sensitive" if row["obscene"] == 1 else "safe"
+            ),
+            axis=1,
         )
-
-        # Drop rows with unmapped labels (if any)
-        combined_df = combined_df.dropna(subset=["label_text"])
 
         combined_df["language"] = "fa"
         combined_df["source"] = "phicad"
@@ -308,6 +306,14 @@ class MultilingualHateSpeechDataLoader:
 
         # Combine all datasets
         combined_df = pd.concat(datasets, ignore_index=True)
+
+        # Clean NaN texts
+        original_len = len(combined_df)
+        combined_df = combined_df.dropna(subset=["text"])
+        combined_df["text"] = combined_df["text"].astype(str)
+        dropped = original_len - len(combined_df)
+        if dropped > 0:
+            logger.warning(f"Dropped {dropped} rows with NaN or missing text")
 
         # Log statistics
         logger.info(f"\n{'='*60}")
@@ -676,7 +682,7 @@ class MultilingualHateSpeechDataLoader:
         # Text length statistics per language
         for lang in df["language"].unique():
             lang_df = df[df["language"] == lang]
-            lengths = [len(text.split()) for text in lang_df["text"]]
+            lengths = [len(str(text).split()) for text in lang_df["text"]]
             stats[f"{lang}_text_stats"] = {
                 "avg_length": np.mean(lengths),
                 "max_length": max(lengths),
@@ -687,6 +693,7 @@ class MultilingualHateSpeechDataLoader:
         # Statistics per source if available
         if "source" in df.columns:
             for source in df["source"].unique():
+                source_df = df[df["source"] == source]
                 stats[f"{source}_label_dist"] = (
                     source_df["label_text"].value_counts().to_dict()
                 )
