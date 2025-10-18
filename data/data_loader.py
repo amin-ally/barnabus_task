@@ -1,4 +1,3 @@
-# src/data/data_loader.py
 import pandas as pd
 from datasets import load_dataset
 from sklearn.model_selection import train_test_split
@@ -22,12 +21,14 @@ class MultilingualHateSpeechDataLoader:
         random_state=42,
         parsoff_data_path: Optional[str] = None,
         phate_data_path: Optional[str] = None,
+        phicad_data_path: Optional[str] = None,
     ):
         self.test_size = test_size
         self.val_size = val_size
         self.random_state = random_state
         self.parsoff_data_path = parsoff_data_path
         self.phate_data_path = phate_data_path
+        self.phicad_data_path = phicad_data_path
 
     def load_english_dataset(self) -> pd.DataFrame:
         """Load the hate_speech_offensive dataset from HuggingFace"""
@@ -137,13 +138,74 @@ class MultilingualHateSpeechDataLoader:
 
         return result_df
 
+    def load_phicad_dataset(self) -> pd.DataFrame:
+        """Load the PHICAD Persian dataset, excluding spam"""
+        if not self.phicad_data_path:
+            logger.warning("PHICAD data path not provided. Skipping PHICAD data.")
+            return pd.DataFrame()
+
+        logger.info("Loading PHICAD dataset...")
+
+        # Path to PHICAD data directory
+        phicad_path = Path(self.phicad_data_path) / "PHICAD"
+
+        part1_path = phicad_path / "PHICAD-part1.csv"
+        part2_path = phicad_path / "PHICAD-part2.csv"
+
+        dfs = []
+
+        for file_path in [part1_path, part2_path]:
+            if file_path.exists():
+                df = pd.read_csv(file_path)
+                dfs.append(df)
+                logger.info(f"Loaded {len(df)} samples from {file_path.name}")
+            else:
+                logger.warning(f"PHICAD file not found: {file_path}")
+
+        if not dfs:
+            logger.error(f"No PHICAD dataset files found in {phicad_path}")
+            return pd.DataFrame()
+
+        # Combine parts
+        combined_df = pd.concat(dfs, ignore_index=True)
+
+        # Rename columns to standardize
+        combined_df.rename(
+            columns={"Text": "text", "Category": "category"},
+            inplace=True,
+            errors="ignore",
+        )
+
+        # Filter out spam
+        combined_df = combined_df[combined_df["category"] != "Spam"]
+
+        # Map labels
+        combined_df["label_text"] = combined_df["category"].map(
+            {"Hate Speech": "hateful", "Obscenity": "sensitive"}
+        )
+
+        # Drop rows with unmapped labels (if any)
+        combined_df = combined_df.dropna(subset=["label_text"])
+
+        combined_df["language"] = "fa"
+        combined_df["source"] = "phicad"
+
+        result_df = combined_df[["text", "label_text", "language", "source"]]
+
+        logger.info(f"Total PHICAD samples after filtering: {len(result_df)}")
+        logger.info(
+            f"PHICAD label distribution:\n{result_df['label_text'].value_counts()}"
+        )
+
+        return result_df
+
     def load_combined_farsi_dataset(self) -> pd.DataFrame:
         """
-        Load and combine both Farsi datasets (Pars-OFF and PHATE) before any processing.
-        This ensures balanced representation of both sources in the final dataset.
+        Load and combine all Farsi datasets (Pars-OFF, PHATE, PHICAD) before any processing.
+        This ensures balanced representation of all sources in the final dataset.
         """
         logger.info("\n" + "=" * 60)
-        logger.info("LOADING COMBINED FARSI DATASETS (Pars-OFF + PHATE)")
+        logger.info("LOADING COMBINED FARSI DATASETS (Pars-OFF + PHATE + PHICAD)")
         logger.info("=" * 60)
 
         farsi_datasets = []
@@ -163,6 +225,14 @@ class MultilingualHateSpeechDataLoader:
             logger.info(f"✓ PHATE loaded: {len(phate_df)} samples")
         else:
             logger.warning("✗ PHATE data not loaded")
+
+        # Load PHICAD
+        phicad_df = self.load_phicad_dataset()
+        if not phicad_df.empty:
+            farsi_datasets.append(phicad_df)
+            logger.info(f"✓ PHICAD loaded: {len(phicad_df)} samples")
+        else:
+            logger.warning("✗ PHICAD data not loaded")
 
         if not farsi_datasets:
             logger.warning("No Farsi datasets loaded!")
@@ -228,7 +298,7 @@ class MultilingualHateSpeechDataLoader:
         if not english_df.empty:
             datasets.append(english_df)
 
-        # Load combined Farsi data (Pars-OFF + PHATE together)
+        # Load combined Farsi data (Pars-OFF + PHATE + PHICAD together)
         farsi_df = self.load_combined_farsi_dataset()
         if not farsi_df.empty:
             datasets.append(farsi_df)
@@ -617,7 +687,6 @@ class MultilingualHateSpeechDataLoader:
         # Statistics per source if available
         if "source" in df.columns:
             for source in df["source"].unique():
-                source_df = df[df["source"] == source]
                 stats[f"{source}_label_dist"] = (
                     source_df["label_text"].value_counts().to_dict()
                 )
@@ -634,43 +703,10 @@ if __name__ == "__main__":
         random_state=42,
         parsoff_data_path="./data",  # Path to directory containing Pars-OFF
         phate_data_path="./data",  # Path to directory containing Phate
+        phicad_data_path="./data",  # Path to directory containing PHICAD
     )
 
-    # Load all datasets (English + Combined Farsi [Pars-OFF + PHATE])
-    combined_df = loader.load_all_datasets()
-
-    # Create balanced dataset (now Farsi datasets are combined before balancing)
-    balanced_df = loader.balance_multilingual_dataset(
-        combined_df, strategy="undersample_per_language"
-    )
-
-    # Prepare splits
-    splits = loader.prepare_multilingual_splits(balanced_df)
-
-    # Save splits to CSV files
-    loader.save_splits(splits, output_dir="./data/processed")
-
-    # Get statistics
-    stats = loader.get_dataset_statistics(combined_df)
-    print("\n" + "=" * 60)
-    print("FINAL DATASET STATISTICS")
-    print("=" * 60)
-    for key, value in stats.items():
-        print(f"{key}: {value}")
-# usage
-from data.data_loader import MultilingualHateSpeechDataLoader
-
-if __name__ == "__main__":
-    # Initialize the multilingual dataloader with all three datasets
-    loader = MultilingualHateSpeechDataLoader(
-        test_size=0.15,
-        val_size=0.15,
-        random_state=42,
-        parsoff_data_path="./data",  # Path to directory containing Pars-OFF
-        phate_data_path="./data",  # Path to directory containing Phate
-    )
-
-    # Load all datasets (English + Combined Farsi [Pars-OFF + PHATE])
+    # Load all datasets (English + Combined Farsi [Pars-OFF + PHATE + PHICAD])
     combined_df = loader.load_all_datasets()
 
     # Create balanced dataset (now Farsi datasets are combined before balancing)
