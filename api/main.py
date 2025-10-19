@@ -130,7 +130,11 @@ def load_model():
 
     checkpoint_path = Path(config["paths"]["models"]) / "best_model.pt"
     if checkpoint_path.exists():
-        model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+        # Load the entire checkpoint dictionary first
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+
+        model.load_state_dict(checkpoint["model_state_dict"])
+
         logger.info("Successfully loaded model weights.")
     else:
         logger.warning(
@@ -171,7 +175,7 @@ def load_model():
 
 
 @app.get("/")
-@limiter.limit("100/minute")
+@limiter.limit("1000/minute")
 async def root(request: Request):
     """Root endpoint with API documentation."""
     return {
@@ -186,7 +190,7 @@ async def root(request: Request):
 
 
 @app.get("/health")
-@limiter.limit("100/minute")
+@limiter.limit("1000/minute")
 async def health_check(request: Request):
     """Health check endpoint to verify service status."""
     return {
@@ -197,7 +201,7 @@ async def health_check(request: Request):
 
 
 @app.post("/classify", response_model=ClassificationResponse)
-@limiter.limit("60/minute")
+@limiter.limit("1000/minute")
 async def classify_text(text_request: TextRequest, request: Request):
     """
     Classifies input text after cleaning and PII masking.
@@ -312,7 +316,7 @@ async def classify_text(text_request: TextRequest, request: Request):
 
 # BATCH ENDPOINT WITH EXPLANATIONS
 @app.post("/batch_classify", response_model=BatchClassificationResponse)
-@limiter.limit("10/minute")  # Lower rate limit for more intensive batch endpoint
+@limiter.limit("1000/minute")  # Lower rate limit for more intensive batch endpoint
 async def batch_classify_texts(batch_request: BatchTextRequest, request: Request):
     """
     Classifies a batch of texts after cleaning and PII masking.
@@ -434,7 +438,7 @@ async def batch_classify_texts(batch_request: BatchTextRequest, request: Request
 
 
 @app.get("/similar", response_model=SimilarResponse)
-@limiter.limit("60/minute")
+@limiter.limit("1000/minute")
 async def find_similar_messages(
     request: Request,
     text: str = Query(
