@@ -10,12 +10,19 @@ import faiss
 from pathlib import Path
 import yaml
 import logging
+import time
+
+# --- NEW/MODIFIED IMPORTS FOR ONNX ---
+import onnxruntime
+from transformers import AutoTokenizer
+from scipy.special import softmax
+
+# --- END ONNX IMPORTS ---
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-from src.models.classifier import HateSpeechClassifier
 from data.preprocessor import MultilingualTextPreprocessor
 
 # Setup structured logging
@@ -46,12 +53,11 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
-# --- Pydantic Models ---
+# --- Pydantic Models (No changes here) ---
 class TextRequest(BaseModel):
     text: str = Field(..., description="Text to classify", min_length=1, max_length=512)
 
 
-# Model for batch requests
 class BatchTextRequest(BaseModel):
     texts: List[str] = Field(
         ...,
@@ -74,11 +80,9 @@ class ClassificationResponse(BaseModel):
     confidence: float
     probabilities: Dict[str, float]
     pii_detected: List[str]
-    # dd an optional field for the explanation
     explanation: Optional[List[ExplanationFeature]] = None
 
 
-# NEW: Model for batch responses
 class BatchClassificationResponse(BaseModel):
     results: List[ClassificationResponse]
 
@@ -95,8 +99,9 @@ class SimilarResponse(BaseModel):
     pii_detected: List[str]
 
 
-# --- Global variables and constants ---
-model: Optional[HateSpeechClassifier] = None
+# --- MODIFIED Global variables for ONNX ---
+onnx_session: Optional[onnxruntime.InferenceSession] = None
+tokenizer: Optional[AutoTokenizer] = None
 preprocessor: Optional[MultilingualTextPreprocessor] = None
 faiss_index: Optional[faiss.Index] = None
 embeddings_data: Optional[Dict] = None
@@ -106,8 +111,8 @@ LABEL_MAP = {0: "safe", 1: "sensitive", 2: "hateful"}
 
 @app.on_event("startup")
 def load_model():
-    """Load model and embeddings on startup"""
-    global model, preprocessor, faiss_index, embeddings_data, device
+    """Load ONNX model, tokenizer, and embeddings on startup"""
+    global onnx_session, tokenizer, preprocessor, faiss_index, embeddings_data, device
 
     logger.info("Starting service initialization...")
 
@@ -122,26 +127,22 @@ def load_model():
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
-    logger.info("Loading multilingual classification model...")
-    model = HateSpeechClassifier(
-        model_name=config["model"]["base_model"],
-        num_classes=config["model"]["num_classes"],
-    )
+    logger.info("Loading tokenizer...")
+    tokenizer = AutoTokenizer.from_pretrained(config["model"]["base_model"])
 
-    checkpoint_path = Path(config["paths"]["models"]) / "best_model.pt"
-    if checkpoint_path.exists():
-        # Load the entire checkpoint dictionary first
-        checkpoint = torch.load(checkpoint_path, map_location=device)
-        state_dict = checkpoint.get("model_state_dict", checkpoint)
-        model.load_state_dict(state_dict, strict=False)
-        logger.info("Successfully loaded model weights.")
-    else:
-        logger.warning(
-            f"Model checkpoint not found at {checkpoint_path}. Using pre-trained weights only."
+    logger.info("Loading ONNX model for inference...")
+    onnx_model_path = Path(config["paths"]["models"]) / "model.onnx"
+    if onnx_model_path.exists():
+        # Use CPUExecutionProvider for CPU-based inference
+        onnx_session = onnxruntime.InferenceSession(
+            str(onnx_model_path), providers=["CPUExecutionProvider"]
         )
-
-    model.to(device)
-    model.eval()
+        logger.info("Successfully loaded ONNX model.")
+    else:
+        logger.error(
+            f"ONNX model not found at {onnx_model_path}. Please run the export script first."
+        )
+        raise FileNotFoundError(f"ONNX model not found at {onnx_model_path}")
 
     logger.info("Initializing text preprocessor with PII masking...")
     preprocessor = MultilingualTextPreprocessor(
@@ -194,7 +195,7 @@ async def health_check(request: Request):
     """Health check endpoint to verify service status."""
     return {
         "status": "healthy",
-        "model_loaded": model is not None,
+        "model_loaded": onnx_session is not None,
         "index_loaded": faiss_index is not None and faiss_index.ntotal > 0,
     }
 
@@ -203,83 +204,84 @@ async def health_check(request: Request):
 @limiter.limit("1000/minute")
 async def classify_text(text_request: TextRequest, request: Request):
     """
-    Classifies input text after cleaning and PII masking.
+    Classifies input text after cleaning and PII masking using the ONNX model.
     Optionally returns top tokens that influenced the decision.
     """
-    if not model or not preprocessor:
+    start_total_time = time.perf_counter()
+
+    if not onnx_session or not preprocessor or not tokenizer:
         raise HTTPException(status_code=503, detail="Model or preprocessor not loaded.")
 
     try:
-        # Preprocess the text
+        # --- 1. Preprocessing ---
+        start_preprocess_time = time.perf_counter()
         language = preprocessor.detect_language(text_request.text)
         cleaned_text = preprocessor.clean_text(text_request.text, language)
         masked_text, pii_types = preprocessor.mask_pii(cleaned_text)
+        preprocess_time = (time.perf_counter() - start_preprocess_time) * 1000
 
         logger.info(f"Classifying text (lang: {language}): {text_request.text[:50]}...")
 
-        # Tokenize for model input
-        encoding = model.tokenizer(
+        # --- 2. Tokenization ---
+        start_tokenize_time = time.perf_counter()
+        encoding = tokenizer(
             masked_text,
             truncation=True,
             padding="max_length",
             max_length=preprocessor.max_length,
             return_tensors="pt",
-        ).to(device)
-
+        )
         input_ids = encoding["input_ids"]
         attention_mask = encoding["attention_mask"]
+        tokenize_time = (time.perf_counter() - start_tokenize_time) * 1000
 
-        # Get model prediction
-        with torch.no_grad():
-            outputs = model(input_ids, attention_mask)
-            logits = outputs["logits"]
-            probs = torch.softmax(logits, dim=-1).squeeze().cpu().numpy()
+        # --- 3. ONNX Model Inference ---
+        start_inference_time = time.perf_counter()
+        ort_inputs = {
+            "input_ids": input_ids.cpu().numpy(),
+            "attention_mask": attention_mask.cpu().numpy(),
+        }
+        ort_outs = onnx_session.run(["logits", "attentions"], ort_inputs)
+        logits, last_layer_attentions = ort_outs[0], ort_outs[1]
+        probs = softmax(logits, axis=-1).squeeze()
+        inference_time = (time.perf_counter() - start_inference_time) * 1000
 
-        # Format the response
+        # --- 4. Response Formatting ---
         confidence = float(probs.max())
         predicted_index = int(probs.argmax())
         label = LABEL_MAP.get(predicted_index, "unknown")
-
         probabilities = {
             LABEL_MAP.get(i, "unknown"): float(prob) for i, prob in enumerate(probs)
         }
 
-        # --- EXPLAINABILITY LOGIC ---
+        # --- 5. Explainability Logic (adapted for NumPy) ---
+        start_explain_time = time.perf_counter()
         explanation = None
-        # 1. Get attentions from the last layer
-        # Shape: [batch_size, num_heads, seq_len, seq_len]
-        last_layer_attentions = outputs["attentions"][-1].squeeze(0)  # Remove batch dim
 
-        # 2. Average attention across all heads
-        # Shape: [seq_len, seq_len]
-        avg_head_attentions = last_layer_attentions.mean(dim=0)
+        # Shape changes from (num_heads, seq_len, seq_len) to (seq_len, seq_len).
+        avg_head_attentions = last_layer_attentions.mean(axis=0)
 
-        # 3. Get attention from the [CLS] token to all other tokens
-        # The [CLS] token's representation is used for classification.
-        # Its attention to other tokens indicates their importance.
-        cls_attentions = avg_head_attentions[0, :]  # Index 0 is the [CLS] token
+        # 2. Get the attention scores from the [CLS] token (the first row) to all other tokens.
+        # This is now a 1D array of floats.
+        cls_attentions = avg_head_attentions[0][0]
 
-        # 4. Get the tokens
-        tokens = model.tokenizer.convert_ids_to_tokens(input_ids.squeeze(0))
+        tokens = tokenizer.convert_ids_to_tokens(input_ids.squeeze(0))
         special_tokens = [
             tok
             for tok in [
-                model.tokenizer.cls_token,
-                model.tokenizer.bos_token,
-                model.tokenizer.sep_token,
-                model.tokenizer.pad_token,
+                tokenizer.cls_token,
+                tokenizer.bos_token,
+                tokenizer.sep_token,
+                tokenizer.pad_token,
             ]
             if tok is not None
         ]
-        # 5. Combine tokens and scores, filtering out special tokens
         explanation_data = []
-        for token, score in zip(tokens, cls_attentions.cpu().numpy()):
+        for token, score in zip(tokens, cls_attentions):
             if token not in special_tokens:
+                print(score)
                 explanation_data.append({"token": token, "score": float(score)})
-
-        # Process explanations only if we have valid tokens
         if explanation_data:
-            # 6. Normalize scores to be more interpretable (e.g., min-max scaling to 0-1)
             scores = np.array([item["score"] for item in explanation_data])
             if scores.max() > scores.min():
                 normalized_scores = (scores - scores.min()) / (
@@ -287,13 +289,22 @@ async def classify_text(text_request: TextRequest, request: Request):
                 )
             else:
                 normalized_scores = np.zeros_like(scores)
-
             for item, norm_score in zip(explanation_data, normalized_scores):
                 item["score"] = round(norm_score, 4)
-
-            # 7. Sort by score and take top-k (e.g., top 10)
             explanation_data.sort(key=lambda x: x["score"], reverse=True)
             explanation = [ExplanationFeature(**item) for item in explanation_data[:10]]
+        explain_time = (time.perf_counter() - start_explain_time) * 1000
+
+        total_time = (time.perf_counter() - start_total_time) * 1000
+
+        logger.info(
+            f"Timing profile for classify endpoint: "
+            f"Total={total_time:.2f}ms, "
+            f"Preprocess={preprocess_time:.2f}ms, "
+            f"Tokenize={tokenize_time:.2f}ms, "
+            f"Inference={inference_time:.2f}ms, "
+            f"Explainability={explain_time:.2f}ms"
+        )
 
         return ClassificationResponse(
             original_text=text_request.text,
@@ -313,15 +324,14 @@ async def classify_text(text_request: TextRequest, request: Request):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-# BATCH ENDPOINT WITH EXPLANATIONS
 @app.post("/batch_classify", response_model=BatchClassificationResponse)
-@limiter.limit("1000/minute")  # Lower rate limit for more intensive batch endpoint
+@limiter.limit("1000/minute")
 async def batch_classify_texts(batch_request: BatchTextRequest, request: Request):
     """
-    Classifies a batch of texts after cleaning and PII masking.
+    Classifies a batch of texts using the ONNX model.
     Also returns token-level explanations for each text.
     """
-    if not model or not preprocessor:
+    if not onnx_session or not preprocessor or not tokenizer:
         raise HTTPException(status_code=503, detail="Model or preprocessor not loaded.")
 
     try:
@@ -346,24 +356,25 @@ async def batch_classify_texts(batch_request: BatchTextRequest, request: Request
             )
             masked_texts_for_model.append(masked_text)
 
-        # 2. Tokenize the entire batch at once
-        encoding = model.tokenizer(
+        # 2. Tokenize the entire batch
+        encoding = tokenizer(
             masked_texts_for_model,
             truncation=True,
-            padding=True,  # Pad to the longest sequence in the batch
+            padding=True,
             max_length=preprocessor.max_length,
             return_tensors="pt",
-        ).to(device)
+        )
 
-        # 3. Get model predictions for the entire batch
-        with torch.no_grad():
-            outputs = model(encoding["input_ids"], encoding["attention_mask"])
-            logits = outputs["logits"]
-            batch_probs = torch.softmax(logits, dim=-1).cpu().numpy()
-            # Get attentions for the whole batch
-            last_layer_batch_attentions = outputs["attentions"][-1]
+        # 3. Get ONNX model predictions for the batch
+        ort_inputs = {
+            "input_ids": encoding["input_ids"].cpu().numpy(),
+            "attention_mask": encoding["attention_mask"].cpu().numpy(),
+        }
+        ort_outs = onnx_session.run(["logits", "attentions"], ort_inputs)
+        batch_logits, last_layer_batch_attentions = ort_outs[0], ort_outs[1]
+        batch_probs = softmax(batch_logits, axis=-1)
 
-        # 4. Format the response for each item in the batch
+        # 4. Format the response for each item
         results = []
         for i, probs in enumerate(batch_probs):
             confidence = float(probs.max())
@@ -374,25 +385,34 @@ async def batch_classify_texts(batch_request: BatchTextRequest, request: Request
                 LABEL_MAP.get(j, "unknown"): float(prob) for j, prob in enumerate(probs)
             }
 
-            # --- START: EXPLAINABILITY LOGIC FOR BATCH ITEM ---
+            # --- START: EXPLAINABILITY LOGIC FOR BATCH ITEM (CORRECTED) ---
             explanation = None
-            item_attentions = last_layer_batch_attentions[
-                i
-            ]  # Shape: [num_heads, seq_len, seq_len]
-            item_input_ids = encoding["input_ids"][i]  # Shape: [seq_len]
+            # Select attentions for the current item from the batch
+            item_attentions = last_layer_batch_attentions[i]
+            item_input_ids = encoding["input_ids"][i]
 
-            avg_head_attentions = item_attentions.mean(dim=0)
-            cls_attentions = avg_head_attentions[0, :]
-            tokens = model.tokenizer.convert_ids_to_tokens(item_input_ids)
+            # Average attention across all heads (axis=0)
+            avg_head_attentions = item_attentions.mean(axis=0)
+
+            # Following your successful fix: get the CLS token's attention scores (the first row)
+            cls_attentions = avg_head_attentions[0]
+
+            tokens = tokenizer.convert_ids_to_tokens(item_input_ids)
+            special_tokens = [
+                tok
+                for tok in [
+                    tokenizer.cls_token,
+                    tokenizer.sep_token,
+                    tokenizer.pad_token,
+                ]
+                if tok is not None
+            ]
 
             explanation_data = []
-            for token, score in zip(tokens, cls_attentions.cpu().numpy()):
-                if token not in [
-                    model.tokenizer.cls_token,
-                    model.tokenizer.sep_token,
-                    model.tokenizer.pad_token,
-                ]:
-                    explanation_data.append({"token": token, "score": float(score)})
+            if cls_attentions.size > 0:
+                for token, score in zip(tokens, cls_attentions):
+                    if token not in special_tokens:
+                        explanation_data.append({"token": token, "score": float(score)})
 
             if explanation_data:
                 scores = np.array([item["score"] for item in explanation_data])
@@ -422,7 +442,7 @@ async def batch_classify_texts(batch_request: BatchTextRequest, request: Request
                     confidence=confidence,
                     probabilities=probabilities,
                     pii_detected=item_data["pii_detected"],
-                    explanation=explanation,  # Add explanation to response
+                    explanation=explanation,
                 )
             )
 
@@ -445,15 +465,14 @@ async def find_similar_messages(
     ),
     k: int = Query(5, ge=1, le=20, description="Number of results to return"),
 ):
-    """Finds and returns k similar messages from the indexed data, masking PII."""
-    if faiss_index is None or not model or not preprocessor:
+    """Finds and returns k similar messages using embeddings from the ONNX model."""
+    if faiss_index is None or not onnx_session or not preprocessor:
         raise HTTPException(
             status_code=503,
             detail="Similarity index or supporting models are not available.",
         )
 
     try:
-        # Preprocess the query text (clean, mask PII, etc.)
         language = preprocessor.detect_language(text)
         cleaned_text = preprocessor.clean_text(text, language)
         masked_query, pii_detected = preprocessor.mask_pii(cleaned_text)
@@ -466,28 +485,39 @@ async def find_similar_messages(
         }
         logger.info("Similar messages request received", extra=log_extra)
 
-        # Tokenize and create embedding for the query
-        encoding = model.tokenizer(
-            cleaned_text,  # Use cleaned, unmasked text for better semantic embeddings
+        encoding = tokenizer(
+            cleaned_text,
             truncation=True,
             padding="max_length",
             max_length=preprocessor.max_length,
             return_tensors="pt",
-        ).to(device)
+        )
 
-        with torch.no_grad():
-            outputs = model(
-                encoding["input_ids"],
-                encoding["attention_mask"],
-                return_embeddings=True,
+        # --- ONNX Inference for Embeddings ---
+        ort_inputs = {
+            "input_ids": encoding["input_ids"].cpu().numpy(),
+            "attention_mask": encoding["attention_mask"].cpu().numpy(),
+        }
+        query_embedding = onnx_session.run(["embeddings"], ort_inputs)[0]
+
+        # ================================================================= #
+        query_dim = query_embedding.shape[1]
+        index_dim = faiss_index.d
+
+        if query_dim != index_dim:
+            error_detail = (
+                f"Dimension mismatch: The query vector has dimension {query_dim}, "
+                f"but the FAISS index was built with dimension {index_dim}. "
+                "This indicates that the model running in the API is different from the one "
+                "used to generate the embeddings. Please re-run the full training, export, "
+                "and serving pipeline with a consistent 'base_model' in config.yaml."
             )
+            logger.error(error_detail)
+            raise HTTPException(status_code=500, detail=error_detail)
+        # ================================================================= #
 
-        query_embedding = outputs["embeddings"].cpu().numpy()
-
-        # Search the FAISS index
         distances, indices = faiss_index.search(query_embedding, k)
 
-        # Format results
         results = []
         for i in range(k):
             idx = indices[0][i]
@@ -496,7 +526,6 @@ async def find_similar_messages(
             original_text = embeddings_data["texts"][idx]
             masked_text, _ = preprocessor.mask_pii(original_text)
 
-            # Truncate for snippet view
             if len(masked_text) > 150:
                 masked_text = masked_text[:150] + "..."
 
