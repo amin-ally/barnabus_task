@@ -132,9 +132,8 @@ def load_model():
     if checkpoint_path.exists():
         # Load the entire checkpoint dictionary first
         checkpoint = torch.load(checkpoint_path, map_location=device)
-
-        model.load_state_dict(checkpoint["model_state_dict"])
-
+        state_dict = checkpoint.get("model_state_dict", checkpoint)
+        model.load_state_dict(state_dict, strict=False)
         logger.info("Successfully loaded model weights.")
     else:
         logger.warning(
