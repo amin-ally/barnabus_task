@@ -24,7 +24,6 @@ api:
   top_k_similar: 5
 
 paths:
-  raw_data: "data/raw/"
   processed_data: "data/processed/"
   # Base directory where all training run folders will be saved
   training_output: "training_runs/" 
