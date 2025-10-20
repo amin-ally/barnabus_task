@@ -32,5 +32,5 @@ paths:
 
 serving_paths:
   # The API will always load the model and embeddings from here
-  models: "serving_model/models/"
-  embeddings: "serving_model/embeddings/"
+  models: "training_runs/run_2025-10-20_20-51-31_distilbert-base-multilingual-cased/models"
+  embeddings: "training_runs/run_2025-10-20_20-51-31_distilbert-base-multilingual-cased/embeddings"
