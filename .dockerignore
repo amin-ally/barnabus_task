@@ -1,0 +1,28 @@
+# .dockerignore
+
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Python cache and virtual environments
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Documentation and configuration
+README.md
+Makefile
+config.yaml
+
+# Tests and training artifacts
+tests/
+training_runs/
+scripts/
+
+# Other
+.repomixignore
