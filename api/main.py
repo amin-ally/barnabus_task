@@ -12,12 +12,10 @@ import yaml
 import logging
 import time
 
-# --- NEW/MODIFIED IMPORTS FOR ONNX ---
 import onnxruntime
 from transformers import AutoTokenizer
 from scipy.special import softmax
 
-# --- END ONNX IMPORTS ---
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -523,8 +521,7 @@ async def find_similar_messages(
             idx = indices[0][i]
             dist = distances[0][i]
 
-            original_text = embeddings_data["texts"][idx]
-            masked_text, _ = preprocessor.mask_pii(original_text)
+            masked_text = embeddings_data["texts"][idx]
 
             if len(masked_text) > 150:
                 masked_text = masked_text[:150] + "..."

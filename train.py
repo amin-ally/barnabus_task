@@ -12,7 +12,7 @@ import json
 # Import our modules
 from src.models.classifier import HateSpeechClassifier
 from src.models.trainer import ModelTrainer, TextDataset
-
+from data.preprocessor import MultilingualTextPreprocessor
 import torch.optim as optim
 
 from torch.utils.data import DataLoader
@@ -26,6 +26,8 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+preprocessor = MultilingualTextPreprocessor(enable_pii_masking=True)
 
 
 def load_config(config_path="config.yaml"):
@@ -463,10 +465,10 @@ def generate_embeddings(model, splits, config):
     model.eval()
 
     all_embeddings = []
-    all_texts = []
     all_labels = []
     all_languages = []
     all_sources = []
+    all_texts_masked = []
 
     for split_name, split_df in splits.items():
         logger.info(f"\nProcessing {split_name} split...")
@@ -497,7 +499,12 @@ def generate_embeddings(model, splits, config):
 
         split_embeddings = np.vstack(split_embeddings)
         all_embeddings.append(split_embeddings)
-        all_texts.extend(split_df["text"].tolist())
+
+        masked_texts_in_split = [
+            preprocessor.mask_pii(text)[0] for text in split_df["text"].tolist()
+        ]
+
+        all_texts_masked.extend(masked_texts_in_split)
         all_labels.extend(split_df["label"].tolist())
         all_languages.extend(split_df["language"].tolist())
         all_sources.extend(split_df["source"].tolist())
@@ -515,7 +522,7 @@ def generate_embeddings(model, splits, config):
     np.savez(
         embeddings_file,
         embeddings=all_embeddings,
-        texts=all_texts,
+        texts=all_texts_masked,
         labels=all_labels,
         languages=all_languages,
         sources=all_sources,
@@ -544,7 +551,7 @@ def generate_embeddings(model, splits, config):
 
     return {
         "embeddings": all_embeddings,
-        "texts": all_texts,
+        "texts": all_texts_masked,
         "labels": all_labels,
         "languages": all_languages,
         "sources": all_sources,
