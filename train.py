@@ -573,20 +573,27 @@ def main():
     logger.info(f"  Learning rate: {config['training']['learning_rate']}")
     logger.info(f"  Epochs: {config['training']['num_epochs']}")
 
-    # Create timestamped output directories for this run
+    #  Create timestamped output directories for this run ---
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    run_dir = Path(config["paths"]["models"]) / f"run_{timestamp}"
-    embeddings_dir = Path(config["paths"]["embeddings"]) / f"run_{timestamp}"
+    model_name = config["model"]["base_model"].split("/")[-1]
 
-    run_dir.mkdir(parents=True, exist_ok=True)
-    embeddings_dir.mkdir(parents=True, exist_ok=True)
+    # Create a single directory for the entire run's output
+    run_output_dir = (
+        Path(config["paths"]["training_output"]) / f"run_{timestamp}_{model_name}"
+    )
 
-    # --- Update config paths so subsequent functions write into this run ---
-    config["paths"]["models"] = str(run_dir)
-    config["paths"]["embeddings"] = str(embeddings_dir)
+    # Define specific subdirectories for models and embeddings within the run directory
+    run_models_dir = run_output_dir / "models"
+    run_embeddings_dir = run_output_dir / "embeddings"
 
-    logger.info(f"  Created run directory: {run_dir}")
-    logger.info(f"  Created embeddings directory: {embeddings_dir}")
+    run_models_dir.mkdir(parents=True, exist_ok=True)
+    run_embeddings_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- Update config paths so subsequent functions write into this run's directories ---
+    config["paths"]["models"] = str(run_models_dir)
+    config["paths"]["embeddings"] = str(run_embeddings_dir)
+
+    logger.info(f"  Created run output directory: {run_output_dir}")
 
     # Load preprocessed data
     splits = load_preprocessed_data(data_dir="./data/processed")
@@ -602,29 +609,25 @@ def main():
     # Generate embeddings
     embeddings_data = generate_embeddings(model, splits, config)
 
-    # Save run summary to a small info file for easy tracking
     run_info = {
         "timestamp": timestamp,
         "base_model": config["model"]["base_model"],
         "num_epochs": metrics["training_epochs"],
         "best_val_f1": metrics["best_val_f1"],
         "test_f1": metrics["test_f1"],
-        "model_path": str(run_dir / "best_model.pt"),
-        "metrics_path": str(run_dir / "metrics.json"),
-        "embeddings_path": str(embeddings_dir / "embeddings.npz"),
+        "model_path": str(run_models_dir / "best_model.pt"),
+        "metrics_path": str(run_models_dir / "metrics.json"),
+        "embeddings_path": str(run_embeddings_dir / "embeddings.npz"),
     }
 
-    with open(run_dir / "run_info.json", "w") as f:
+    with open(run_output_dir / "run_info.json", "w") as f:
         json.dump(run_info, f, indent=2)
 
     logger.info("\n" + "=" * 60)
     logger.info("TRAINING COMPLETED SUCCESSFULLY!")
     logger.info("=" * 60)
     logger.info(f"Final Test F1 Score: {metrics['test_f1']:.4f}")
-    logger.info(f"Best Validation F1 Score: {metrics['best_val_f1']:.4f}")
-    logger.info(f"Total Training Epochs: {metrics['training_epochs']}")
-    logger.info(f"Model saved to: {run_dir}")
-    logger.info(f"Embeddings saved to: {embeddings_dir}")
+    logger.info(f"Model and embeddings saved to: {run_output_dir}")
     logger.info("=" * 60)
 
 

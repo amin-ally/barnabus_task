@@ -129,16 +129,15 @@ def load_model():
     tokenizer = AutoTokenizer.from_pretrained(config["model"]["base_model"])
 
     logger.info("Loading ONNX model for inference...")
-    onnx_model_path = Path(config["paths"]["models"]) / "model.onnx"
+    onnx_model_path = Path(config["serving_paths"]["models"]) / "model.onnx"
     if onnx_model_path.exists():
-        # Use CPUExecutionProvider for CPU-based inference
         onnx_session = onnxruntime.InferenceSession(
             str(onnx_model_path), providers=["CPUExecutionProvider"]
         )
-        logger.info("Successfully loaded ONNX model.")
+        logger.info(f"Successfully loaded ONNX model from {onnx_model_path}")
     else:
         logger.error(
-            f"ONNX model not found at {onnx_model_path}. Please run the export script first."
+            f"ONNX model not found at {onnx_model_path}. Please deploy a model first."
         )
         raise FileNotFoundError(f"ONNX model not found at {onnx_model_path}")
 
@@ -149,7 +148,7 @@ def load_model():
     )
 
     logger.info("Loading embeddings for similarity search...")
-    embeddings_file = Path(config["paths"]["embeddings"]) / "embeddings.npz"
+    embeddings_file = Path(config["serving_paths"]["embeddings"]) / "embeddings.npz"
     if embeddings_file.exists():
         data = np.load(embeddings_file, allow_pickle=True)
         embeddings = data["embeddings"].astype("float32")
@@ -163,7 +162,9 @@ def load_model():
             "texts": data["texts"].tolist(),
             "labels": data["labels"].tolist(),
         }
-        logger.info(f"Loaded {faiss_index.ntotal} embeddings into FAISS index.")
+        logger.info(
+            f"Loaded {faiss_index.ntotal} embeddings into FAISS index from {embeddings_file}."
+        )
     else:
         logger.warning(
             f"Embeddings file not found at {embeddings_file}. Similarity search will be unavailable."
