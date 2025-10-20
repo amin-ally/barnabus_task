@@ -20,5 +20,7 @@ python-dotenv>=1.0.0
 googletrans==4.0.0-rc1
 slowapi>=0.1.9
 umap-learn==0.5.5
-
+onnx>=1.14.0
+onnxruntime>=1.15.1
+httpx>=0.24.0,<0.26.0
   
