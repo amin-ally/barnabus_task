@@ -37,8 +37,6 @@ It is built with a robust MLOps pipeline, including automated training, evaluati
 Clone the repository and install the required dependencies using the Makefile.
 
 ```bash
-git clone <your-repo-url>
-cd <your-repo-name>
 make setup
 ```
 
