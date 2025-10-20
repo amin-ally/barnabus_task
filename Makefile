@@ -22,7 +22,7 @@ prepare-data:
 
 train:
 	@echo ">> Starting model training..."
-	python train.py
+	python -m train
 	@echo ">> Training complete. Model and embeddings saved to ./models and ./data/embeddings."
 
 # ==============================================================================
@@ -30,19 +30,7 @@ train:
 # ==============================================================================
 serve:
 	@echo ">> Starting FastAPI server at http://localhost:8000..."
-	uvicorn app:app --host 0.0.0.0 --port 8000 --reload
-
-# ==============================================================================
-# Testing & Evaluation
-# ==============================================================================
-test:
-	@echo ">> Running unit and integration tests..."
-	pytest -v
-	@echo ">> Running latency benchmark..."
-	python tests/benchmark_latency.py
-	@echo ">> Running retrieval quality evaluation..."
-	python tests/test_retrieval_ndcg.py
-
+	uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 # ==============================================================================
 # Cleanup
 # ==============================================================================
@@ -80,7 +68,7 @@ deploy:
 		cp "$(RUN_PATH)/embeddings/embeddings.npz" "$$SERVING_EMBEDDINGS_DIR/embeddings.npz"; \
 		\
 		echo ">> Exporting model to ONNX format at $$SERVING_MODELS_DIR..."; \
-		python scripts/export_to_onnx.py --run_path "$(RUN_PATH)"; \
+		python -m scripts.export_to_onnx --run_path "$(RUN_PATH)"; \
 		\
 		echo "✅ Deployment complete. You can now start the API with 'make serve'."; \
 	}
